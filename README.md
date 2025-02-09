@@ -1,6 +1,7 @@
 # USN Parser
 
 This is a command-line tool for parsing and analyzing the USN (Update Sequence Number) Journal on Windows systems. The USN Journal is a feature of the NTFS file system that records changes to files and directories on a volume.
+Unlike fsutil, this tool provides more detailed information about the USN Journal records, including Full file name. 
 
 ## Usage
 Where `cmd` is one of the following:
@@ -25,7 +26,25 @@ Where `cmd` is one of the following:
 ## Examples
 
 - Get the USN Journal statistics:
-- Read USN Journal records:
+  ```
+  usn_parser stats --volume "\\\\.\\C:"
+  ```
+- Read USN Journal records from the specified USN number:
+  ```
+  usn_parser usn_read --volume "\\\\.\\C:" --start 0x0
+  ```
+- Read USN Journal records from the specified USN number to the end:
+  ```
+  usn_parser usn_read --volume "\\\\.\\C:" --start 0x0 --end 0x1000
+  ```
+- Read USN Journal records from the specified USN number with the specified count:
+  ```
+  usn_parser usn_read --volume "\\\\.\\C:" --start 0x0 --count 100
+  ```
+- Read USN Journal records from the specified USN number with the specified output format:
+  ```
+  usn_parser usn_read --volume "\\\\.\\C:" --start 0x0 --format csv
+  ```
 ## License
 
 This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for more information.
