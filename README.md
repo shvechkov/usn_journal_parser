@@ -26,7 +26,7 @@ Where `cmd` is one of the following:
 - `--reason <usn_reason>`: Filter records by the specified USN reason.
 - `--regexp <regexp>`: Filter records by the specified regular expression.
 - `--format <txt|csv|json>`: The output format for the parsed records.
-- `--ofile <path>`: The output file to write the parsed records.
+- `--ofile <path>`: The output file to write the parsed records.  
 
 ## Examples
 
