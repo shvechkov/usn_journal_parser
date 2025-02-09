@@ -4,6 +4,11 @@ This is a command-line tool for parsing and analyzing the USN (Update Sequence N
 Unlike fsutil, this tool provides more detailed information about the USN Journal records, including Full file name. 
 
 ## Usage
+
+```
+usn_parser <cmd> [--volume <path>] [--start <usn_start>] [[--end <usn_end>] | [--count <count>]] [--reason <usn_reason>] [--regexp <regexp>] [--format <txt|csv|json>] [--ofile <path>]
+```
+
 Where `cmd` is one of the following:
 
 - `help`: Display the help message.
