@@ -16,7 +16,7 @@ public :
 	bool init(std::wstring vol_path);
 
 	bool QueryUsnJournal(USN_JOURNAL_DATA_V2& data);
-	void ReadUsnJournalRecords(USN_JOURNAL_DATA_V2& JournalData, UINT64 usn_start, UINT64 usn_end, UINT64 usn_count, std::string format);
+	int ReadUsnJournalRecords(USN_JOURNAL_DATA_V2& JournalData, UINT64 usn_start, UINT64 usn_end, UINT64 usn_count, std::string format);
 
 	bool setOutputFile(std::string path) { 
 		_outputStream.open(path);

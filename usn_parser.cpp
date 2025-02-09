@@ -65,7 +65,6 @@ inline std::wstring getReason(int usn_reason) {
 
 
 
-#define NTFS_VOLUME_NAME L"\\\\.\\C:" // Replace C: with your volume letter if needed
 
 
 
@@ -122,6 +121,8 @@ bool UsnJournalParser::_PrintUsnRecord(PUSN_RECORD &record, std::wstring path, s
     if (format == "csv"){
         //print into file
         if (_outputStream.is_open()) {
+            //remove comma from path
+            path.erase(std::remove(path.begin(), path.end(), L','), path.end());
             _outputStream <<record->Usn << L"," << path << L"," << getReason(record->Reason) << L"," << record->FileReferenceNumber << L"," << record->ParentFileReferenceNumber << L",0x" << std::hex << record->FileAttributes << std::dec << std::endl;
             return true;
         }
@@ -145,14 +146,17 @@ bool UsnJournalParser::_PrintUsnRecord(PUSN_RECORD &record, std::wstring path, s
 }
 
 // Function to read and display USN Journal records
-void UsnJournalParser::ReadUsnJournalRecords(USN_JOURNAL_DATA_V2 & JournalData,UINT64 usn_start=0, UINT64 usn_end=0, UINT64 usn_count=0, std::string format="") {
+int UsnJournalParser::ReadUsnJournalRecords(USN_JOURNAL_DATA_V2 & JournalData,UINT64 usn_start=0, UINT64 usn_end=0, UINT64 usn_count=0, std::string format="") {
     DWORD bytesReturned = 0;
     ULONG bufferSize = 8192; // Size of the buffer to read
     PVOID buffer = malloc(bufferSize);
 
+    int error = 0;
+
+
     if (!buffer) {
         std::wcerr << L"Memory allocation failed!" << std::endl;
-        return;
+        return ERROR_NOT_ENOUGH_MEMORY;
     }
 
     // Prepare the input structure for reading the journal
@@ -184,7 +188,7 @@ void UsnJournalParser::ReadUsnJournalRecords(USN_JOURNAL_DATA_V2 & JournalData,U
             sizeof(ReadData), 
             buffer, bufferSize, &bytesReturned, NULL)) 
         {
-                DWORD error = GetLastError();
+                error = GetLastError();
                 if (error == ERROR_HANDLE_EOF) {
                     break;
                 }
@@ -223,39 +227,19 @@ void UsnJournalParser::ReadUsnJournalRecords(USN_JOURNAL_DATA_V2 & JournalData,U
             if (!parent_path.empty())
 				path = parent_path + L"\\" + path;
 
-             /*
-            if (path.empty()) {
-                path = std::wstring(record->FileName, record->FileNameLength / 2);
-                auto parent_path = _mft->getPathByFileReferenceNumber(record->ParentFileReferenceNumber, true);
-
-                if (!parent_path.empty())
-                    path = parent_path + L"\\" + path;
-
-            }
-            */
-
-
-            //std::wcout <<L"Path:" << path <<  L"     Event: " << getReason(record->Reason) << std::endl;
-
             _PrintUsnRecord(record, path, format);
-
-            //std::wcout.flush(); // Ensure output is written immediately
-
-
             record = (PUSN_RECORD)(((PBYTE)record) + record->RecordLength);
 
-
-            //ReadData.StartUsn = record->Usn; // Update the FirstUsn for the next iteration
         } // end buffer while
     }
-
 
     std::wcout << L"Records number: " << rec_num << std::endl;
     std::wcout << L"Last USN : " << last_usn << std::flush << std::endl;
 
-
     // Clean up memory
     free(buffer);
+
+    return error;
 }
 
 
@@ -283,7 +267,7 @@ bool UsnJournalParser::init(std::wstring vol_path) {
         return false;
     }
 
-    _hVolume = CreateFile(L"\\\\.\\C:", GENERIC_READ | GENERIC_WRITE,
+    _hVolume = CreateFileW(vol_path.c_str(), GENERIC_READ | GENERIC_WRITE,
         FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 0, NULL);
 
     if (_hVolume == INVALID_HANDLE_VALUE) {
@@ -430,8 +414,7 @@ int main(int argc, char** argv) {
     }
 
     if (command == "usn_read") {        
-        usn_parser.ReadUsnJournalRecords(journalData,usn_start,usn_end,usn_count, format);  
-        return 0;
+        return usn_parser.ReadUsnJournalRecords(journalData,usn_start,usn_end,usn_count, format);
     }
 
     return usage();

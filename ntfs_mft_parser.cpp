@@ -1,7 +1,8 @@
 ﻿/*
-* The below link/code was used/ammended
+* The below link/code was used/ammended by me when studing NTFS MFT internals 
+* Cudos to the author of the article! 
 * https://handmade.network/forums/articles/t/7002-tutorial_parsing_the_mft
-
+*
     This is free and unencumbered software released into the public domain.
     Anyone is free to copy, modify, publish, use, compile, sell, or distribute this
     software, either in source code form or as a compiled binary, for any purpose,
