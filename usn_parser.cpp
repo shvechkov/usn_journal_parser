@@ -11,6 +11,7 @@
 #include <locale>
 #include <string>
 #include <codecvt>
+#include <cstdint>   // for int64_t
 
 #include "usn_parser.h"
 
@@ -291,6 +292,8 @@ where cmd is one of the following: \n\
     usn_last: Get the last usn number\n\
     usn_read: Read usn journal records\n\
 		E.g. usn_parser usn_read --volume \"\\\\.\\C:\" [--start <usn_start> ][[--end <usn_end>]|[--count <count>]]  \n\
+    mft: Interactive shell to explore MFT records \n\
+        E.g. usn_parser mft  \"\\\\.\\C:\" \n\
 ";
 
 	std::cout << help_msg << std::endl;
@@ -314,6 +317,105 @@ int get_switch_value(int argc, char* argv[], std::string switch_name, std::strin
 }
 
 
+int mft_shell(int argc, char** argv) {
+    // Open the drive for reading
+
+
+    Ntfs_c* vol = new Ntfs_c();
+
+    //use "vssadmin List Shadows" to get VSS shadow copy volume names ..or open any live NTFS volume 
+    //"\\\\?\\GLOBALROOT\\Device\\HarddiskVolumeShadowCopy3"
+
+    if (argc < 2) {
+        std::cerr << "Usage: mft_shell <volume_path>" << std::endl;
+        return 1;
+    }
+    // Convert the volume path to a wide string
+    std::wstring volPath = std::wstring(argv[2], argv[2] + strlen(argv[2]));
+
+    if (!vol->init(volPath)) {
+        std::cerr << "Error opening drive!" << std::endl;
+        return 1;
+    }
+
+
+
+    while (true) {
+        std::string cmd;
+        std::cout << "mftinfo> ";
+        std::getline(std::cin, cmd);
+        if (cmd == "exit") {
+            break;
+        }
+        else if (cmd == "ranges") {
+            vol->printRanges();
+        }
+        else if (cmd == "names") {
+            vol->printFileNames();
+        }
+        else if (cmd == "names_full") {
+            vol->printFileNames(true);
+        }
+        else if (cmd == "help") {
+            std::cout << "Commands: exit, ranges, names, names_full,file, ref" << std::endl;
+        }
+        else if (cmd == "ref") {
+            // Get FileReferenceNumber
+            std::cout << "Enter FileReferenceNumber: ";
+
+            std::string inputStr;
+            std::cin >> inputStr;
+            int64_t ref_num = stringToInt64(inputStr);
+
+
+            auto rec_num = vol->printRecordByFileReferenceNumber(ref_num);
+        }
+        else if (cmd == "file") {
+            // Get the file name
+            std::string name;
+            std::cout << "Enter the file name: ";
+            std::getline(std::cin, name);
+            //convert name to wstring
+            std::wstring wname = std::wstring(name.begin(), name.end());
+            auto rec_num = vol->printRecordByFileName(wname);
+            if (rec_num)
+                vol->printRangesByFileNumber(rec_num);
+        }
+        else if (cmd == "search") {
+            // Get the file name
+            uint64_t start;
+            std::string startStr;
+            std::cout << "starting cluster:";
+            std::getline(std::cin, startStr);
+            start = std::stoull(startStr);
+
+            uint64_t len;
+            std::string lenStr;
+            std::cout << "length:";
+            std::getline(std::cin, lenStr);
+            len = std::stoull(lenStr);
+
+            vol->findRanges(start, len);
+
+
+        }
+        else if (cmd == "exit") {
+            break;
+        }
+
+        else {
+            std::cout << "Unknown command." << std::endl;
+        }
+    }
+
+
+
+
+
+    return 0;
+}
+
+
 int main(int argc, char** argv) {
 
 
@@ -330,6 +432,12 @@ int main(int argc, char** argv) {
     if (command == "help") {
         return usage();
     }
+
+
+    if (command == "mft") {
+        return mft_shell(argc, argv);
+    }
+
 
     UsnJournalParser usn_parser;
     std::string volume = "";
@@ -419,3 +527,5 @@ int main(int argc, char** argv) {
 
     return usage();
 }
+
+

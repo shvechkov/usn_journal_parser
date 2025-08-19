@@ -33,6 +33,7 @@
 #include <list>
 #include <algorithm>
 
+#include <cassert>
 
 #include "ntfs_mft_parser.h"
 
@@ -214,6 +215,8 @@ void Ntfs_c::printFileNames(bool absolute) {
                 auto cur_rec = rec.second;
                 while (cur_rec.file_rec_header.recordNumber != cur_rec.file_name_attr_header.parentRecordNumber) {
                     auto parent_rec = _file_records[cur_rec.file_name_attr_header.parentRecordNumber];
+                    if (parent_rec.names.size() == 0)
+                        break;
                     path = parent_rec.names[0] + L"\\" + path;
                     cur_rec = _file_records[parent_rec.file_rec_header.recordNumber];
                 }
@@ -327,6 +330,43 @@ void Ntfs_c::getResidentDataRun(ResidentAttributeHeader* dataAttribute) {
 }
 
 
+
+
+// Function to apply update sequence fixup for a FileRecordHeader
+// This is used to restore the original bytes in the update sequence area of the MFT record
+// w/o this code the MFT record may not be correctly parsed, as the update sequence area contains fixups for the data runs
+// and as a result the previous code w/o this fucntoin could not read filenames longer than 75 symbols
+
+
+/*
+The issue with not being able to read or find file names longer than 75 characters , without the update 
+sequence fixup code, stems from how NTFS handles data integrity in MFT records. Specifically, NTFS uses an update sequence mechanism
+to protect against data corruption during disk writes, which overwrites certain bytes in each MFT record. Without reversing this 
+process (via fixup), the parser reads corrupted data, particularly affecting attributes like $FILE_NAME when they span or are near
+specific sector boundaries. This led to the observed truncation of file names at 75 characters and the appearance of corrupted 
+characters (e.g., ↨ caused by invalid UTF-16 code units like 07 00 or 09 00). Below, I’ll explain the details of why this happens 
+and how the fixup code resolves it, focusing on the NTFS update sequence mechanism and its impact on file name parsing.
+*/
+
+
+
+void applyUpdateSequenceFixup(FileRecordHeader* fileRecord) {
+    if (fileRecord->magic == 0x454C4946) { // Check for "FILE" magic
+        uint16_t* updateSequence = (uint16_t*)((uint8_t*)fileRecord + fileRecord->updateSequenceOffset);
+        uint16_t sequenceNumber = updateSequence[0];
+        if (fileRecord->updateSequenceSize == 3) { // Expect 3 words: sequence number + 2 fixups
+            uint16_t* fixupPos1 = (uint16_t*)((uint8_t*)fileRecord + 510); // Last 2 bytes of first sector
+            if (*fixupPos1 == sequenceNumber) {
+                *fixupPos1 = updateSequence[1]; // Restore original bytes
+            }
+            uint16_t* fixupPos2 = (uint16_t*)((uint8_t*)fileRecord + 1022); // Last 2 bytes of second sector
+            if (*fixupPos2 == sequenceNumber) {
+                *fixupPos2 = updateSequence[2]; // Restore original bytes
+            }
+        }
+    }
+}
+
 bool Ntfs_c::init(std::wstring deicePath) {
     _drive = CreateFileW(deicePath.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 0, NULL);
     Read(&_bootSector, 0, 512);
@@ -337,6 +377,9 @@ bool Ntfs_c::init(std::wstring deicePath) {
 
     // Get the file record header
     FileRecordHeader* fileRecord = (FileRecordHeader*)mftFile;
+
+
+    applyUpdateSequenceFixup(fileRecord);
 
     // Get the first attribute header
     AttributeHeader* attribute = (AttributeHeader*)(mftFile + fileRecord->firstAttributeOffset);
@@ -415,7 +458,6 @@ bool Ntfs_c::init(std::wstring deicePath) {
             // Print the progress
             fprintf(stderr, "\rReading MFT: %d%% ", (int)(recordsProcessed * 100 / approximateRecordCount));
 
-
             // Calculate the number of files to load
             uint64_t filesToLoad = MFT_FILES_PER_BUFFER;
             if (filesRemaining < MFT_FILES_PER_BUFFER) filesToLoad = filesRemaining;
@@ -429,6 +471,9 @@ bool Ntfs_c::init(std::wstring deicePath) {
             for (int i = 0; i < filesToLoad; i++) {
                 // Get the file record
                 FileRecordHeader* fileRecord = (FileRecordHeader*)(mftBuffer + MFT_FILE_SIZE * i);
+
+				applyUpdateSequenceFixup(fileRecord);
+
                 recordsProcessed++;
 
                 // Skip unused file records
@@ -440,14 +485,11 @@ bool Ntfs_c::init(std::wstring deicePath) {
                 // Check the magic number of the file record
                 assert(fileRecord->magic == 0x454C4946);
 
-                // std::cout << "---- MFT record ------ rec_num:" << fileRecord->recordNumber  << " unused:"<< fileRecord->unused << std::endl;
-
                 FileRecord fr;
                 fr.file_rec_header = *fileRecord;
                 _file_records[fileRecord->recordNumber] = fr;
 
                 _file_references[_createFileReferenceNumber(fr)] = &_file_records[fileRecord->recordNumber];
-
 
                 vector<pair<uint64_t, uint64_t>> fileDataRuns;
 
@@ -463,7 +505,7 @@ bool Ntfs_c::init(std::wstring deicePath) {
                             dataAttribute = (NonResidentAttributeHeader*)attribute;
                             fileDataRuns = getNonResidentDataRuns(dataAttribute);
 
-                            //saving file's data runs into a global list of ranges
+                            // Saving file's data runs into a global list of ranges
                             for (auto r : fileDataRuns) {
                                 struct FileRange fr;
                                 fr.start = r.first;
@@ -471,27 +513,18 @@ bool Ntfs_c::init(std::wstring deicePath) {
                                 fr.recordNumber = fileRecord->recordNumber;
                                 _ranges.push_back(fr);
                             }
-
-
-
                         }
                         else {
                             ResidentAttributeHeader* dataAttribute = (ResidentAttributeHeader*)attribute;
 
                             auto mft_block_offset = clusterNumber * _bytesPerCluster + positionInBlock;
-
                             auto buff_offset = (uint8_t*)dataAttribute - (uint8_t*)mftBuffer;
-                            //  std::cout << "\t Resident Data Run:   disk offset: "<< mft_block_offset + buff_offset << " len:" << dataAttribute->attributeLength <<std::endl;
-  //                            getResidentDataRun(dataAttribute);
-
                             struct FileRange fr;
                             fr.start = mft_block_offset + buff_offset;
                             fr.length = dataAttribute->attributeLength;
                             fr.recordNumber = fileRecord->recordNumber;
                             _ranges.push_back(fr);
-
                         }
-
                     }
                     else if (attribute->attributeType == 0x30) {
                         // Found the file name attribute
@@ -499,36 +532,45 @@ bool Ntfs_c::init(std::wstring deicePath) {
 
                         // Check the namespace type and non-resident flag
                         if (fileNameAttribute->namespaceType != 2 && !fileNameAttribute->nonResident) {
-
                             std::wstring fname(fileNameAttribute->fileName, fileNameAttribute->fileName + fileNameAttribute->fileNameLength);
-                            //std::cout << fname << " isDir:" <<fileRecord->isDirectory << std::endl;
                             _file_records[fileRecord->recordNumber].addName(fname);
                             _file_records[fileRecord->recordNumber].file_name_attr_header = *fileNameAttribute;
 
-                            /*
-                            if (fname == "ALEXEY.TXT") {
-                                std::cout << fname << "is my file - check it " << std::endl;
-                                int64_t ref_num = _createFileReferenceNumber(fr);
-                                printRecordByFileReferenceNumber(ref_num);
-                            }
-                            */
+                            //std::wstring targetName = L"000000000000000000000000000000000000000000000000000000000000000123456A.pdf";
+                            //if (fname == targetName || 144466 == fileRecord->recordNumber) {
+                            //    // Debug output for specific record or target file
+                            //    std::cout << "Record " << fileRecord->recordNumber << ": attributeLength=" << attribute->length
+                            //        << ", fileNameLength=" << (int)fileNameAttribute->fileNameLength
+                            //        << ", namespaceType=" << (int)fileNameAttribute->namespaceType << std::endl;
 
+                            //    // Check if file name fits within attribute and MFT record
+                            //    size_t nameBytes = fileNameAttribute->fileNameLength * sizeof(wchar_t);
+                            //    if ((uint8_t*)fileNameAttribute->fileName + nameBytes > (uint8_t*)fileRecord + MFT_FILE_SIZE ||
+                            //        (uint8_t*)fileNameAttribute->fileName + nameBytes > (uint8_t*)attribute + attribute->length) {
+                            //        std::cerr << "Error: File name exceeds boundaries for record " << fileRecord->recordNumber << std::endl;
+                            //    }
+                            //    else {
+                            //        std::wstring fname(fileNameAttribute->fileName, fileNameAttribute->fileName + fileNameAttribute->fileNameLength);
+                            //        std::wcout << L"File name: " << fname << L", length: " << fname.length() << std::endl;
+                            //        // Hexdump file name data
+                            //        std::cout << "Raw file name bytes: ";
+                            //        for (size_t i = 0; i < nameBytes; i++) {
+                            //            printf("%02x ", ((uint8_t*)fileNameAttribute->fileName)[i]);
+                            //        }
+                            //        std::cout << std::endl;
+                            //        _file_records[fileRecord->recordNumber].addName(fname);
+                            //        _file_records[fileRecord->recordNumber].file_name_attr_header = *fileNameAttribute;
+                            //    }
 
-
+                            //    // Use std::wcout for wide string output
+                            //    std::wcout << fname << L" is my file - check it " << std::endl;
+                            //    int64_t ref_num = _createFileReferenceNumber(fr);
+                            //    printRecordByFileReferenceNumber(ref_num);
+                            //}
                         }
                         else if (fileNameAttribute->namespaceType != 2 && fileNameAttribute->nonResident) {
-                            //can we get resident file name attribute?
-                            //Q: what non resident means for a filename aribute?
-                            //A: non resident means that the data is stored in a different location, and the data runs are used to find the data
-                            //Q: what is the difference between the data attribute and the filename attribute?
-                            //A: the filename attribute is a resident attribute, and the data attribute is a non-resident attribute
-                            //Q: can filename attribute be a non-residentattribute?
-                            //A: no, the filename attribute is always resident (this answer was provide by copilot ..) we'll test below adding assert to check this
-                            assert(0);
-
+                            assert(0); // $FILE_NAME is always resident
                         }
-
-
                     }
                     else if (attribute->attributeType == 0xFFFFFFFF) {
                         // Reached the end of the file record
@@ -547,22 +589,122 @@ bool Ntfs_c::init(std::wstring deicePath) {
     // Print the number of files found
     fprintf(stderr, "\nFound %lld files.\n", _file_records.size());
 
-    // Sort the list using the custom comparator(this is for searching files/ranges affected during incremental backup) 
-    //cout << "Sorting ranges .." << endl;
+    // Sort the list using the custom comparator (for searching files/ranges affected during incremental backup)
     _ranges.sort(compare);
 
     return true;
 }
 
-int64_t stringToInt64(const std::string& str) {
-    try {
-        return std::stoll(str);
+std::string Ntfs_c::ChangeType2Str(Ntfs_c::change_type_n change) {
+    if (change == Ntfs_c::NEW) {
+        return "NEW";
     }
-    catch (const std::exception& e) {
-        std::cerr << "Error: Invalid input - " << e.what() << std::endl;
-        return 0; // Return 0 or handle error appropriately
+    else if (change == Ntfs_c::MODIFIED) {
+        return "MODIFIED";
+    }
+    else if (change == Ntfs_c::RENAMED) {
+        return "RENAMED";
+    }
+    else if (change == Ntfs_c::DELETED) {
+        return "DELETED";
+    }
+    else if (change == Ntfs_c::NO_CHANGE) {
+        return "NO_CHANGE";
+    }
+    else {
+        return "UNKNOWN";
     }
 }
+
+Ntfs_c::change_type_n Ntfs_c::detectRecordChange(Ntfs_c& prev_mft, Ntfs_c::FileRecord& prev_rec, Ntfs_c& cur_mft, Ntfs_c::FileRecord& cur_rec) {
+
+    // Check if the record was renamed
+    auto prev_name = prev_mft.printRecordName(prev_rec.file_rec_header.recordNumber, true);
+    auto cur_name = cur_mft.printRecordName(cur_rec.file_rec_header.recordNumber, true);
+
+    if (prev_rec.file_rec_header.fileReference != cur_rec.file_rec_header.fileReference) {
+        assert(prev_rec.file_rec_header.fileReference != cur_rec.file_rec_header.fileReference); //this should never happen - if it does, we have a bug in the code
+        return NO_CHANGE;
+    }
+
+    if (prev_rec.file_name_attr_header.parentRecordNumber != cur_rec.file_name_attr_header.parentRecordNumber || prev_name != cur_name) {
+        return RENAMED;
+    }
+
+    // Check if the record was modified
+    if (prev_rec.file_name_attr_header.modificationTime != cur_rec.file_name_attr_header.modificationTime ||
+        prev_rec.file_rec_header.usedSize != cur_rec.file_rec_header.usedSize ||
+        prev_rec.file_name_attr_header.metadataModificationTime != cur_rec.file_name_attr_header.metadataModificationTime ||
+        prev_rec.file_name_attr_header.allocatedSize != cur_rec.file_name_attr_header.allocatedSize ||
+        prev_rec.file_name_attr_header.realSize != cur_rec.file_name_attr_header.realSize ||
+        prev_rec.file_rec_header.allocatedSize != cur_rec.file_rec_header.allocatedSize ||
+        prev_rec.file_rec_header.logSequence != cur_rec.file_rec_header.logSequence ||
+        prev_rec.file_name_attr_header.flags != cur_rec.file_name_attr_header.flags) {
+        return MODIFIED;
+    }
+
+
+
+    // If no changes detected, return NO_CHANGE
+    return NO_CHANGE;
+
+
+}
+
+//find a record in the other MFT which matches the current record by FRN (FRN is a unique identifier for a file in NTFS and includes record number and sequence number)
+std::pair<const uint64_t, Ntfs_c::FileRecord*>* Ntfs_c::FindRecord(std::pair<uint64_t, Ntfs_c::FileRecord*> rec, Ntfs_c& other) {
+
+    assert(rec.second->file_rec_header.fileReference != rec.first);
+
+    //find rec by FRN in other 
+    auto it = other._file_references.find(rec.first);
+    if (it == other._file_references.end()) {
+        return nullptr; // record not found in the other MFT
+    }
+
+    return &(*it);
+}
+
+
+
+
+std::map<uint64_t, Ntfs_c::change_type_n > Ntfs_c::diff(Ntfs_c& other) {
+
+    std::map<uint64_t, Ntfs_c::change_type_n > diff_map;
+
+    //first find which files are missing in the other MFT - we search by FRN (FileReferenceNumber) which is a unique identifier for a file in NTFS and includes record number and sequence number
+    for (auto& rec : _file_references) {
+        //below searches both by file record which can be reassigned and by fileReferenceNumber
+        auto p = FindRecord(rec, other);
+        if (!p)
+            diff_map[rec.first] = DELETED; // file is missing in the other MFT
+    }
+
+    // now find files which are present in other MFT but missing in current MFT
+    for (auto& rec : other._file_references) {
+        //below searches both by file record which can be reassigned and by fileReferenceNumber
+        auto p = FindRecord(rec, *this);
+        if (!p)
+            diff_map[rec.first] = NEW; // file is missing in the current MFT
+        else if (rec.first <= 11) { //skip system files - TBD check where this number comes from
+            continue; //skip system files
+        }
+        else {
+            //check if the file record was reassigned
+            auto other_rec = other._file_records[rec.second->file_rec_header.recordNumber]; //get the file record from the other MFT
+            auto cur_rec = _file_records[p->second->file_rec_header.recordNumber]; //get the file record from the current MFT
+            auto change = detectRecordChange(other, other_rec, *this, cur_rec);
+            if (change != NO_CHANGE) {
+                diff_map[rec.first] = change; //record reassigned
+            }
+        }
+
+    }
+    return diff_map;
+
+}
+
+
 
 
 /*
